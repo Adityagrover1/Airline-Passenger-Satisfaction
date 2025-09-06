@@ -1,0 +1,345 @@
+---
+title: "AirlinePassengerSatisfaction"
+output: html_document
+date: "2025-09-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Basics of the Data.
+```{r}
+data <- read.csv("train.csv")
+head <- head(data)
+summary <-  summary(data)
+#str(data)
+```
+
+PRE-PROCESSING:
+```{r}
+#Filtering missing values
+nullvalues <- sum(is.na(data))
+cat("Total number of nullvalues =",nullvalues,"\n")
+totaldata <- nrow(data)
+cat("Total number of records =",totaldata ,"\n")
+data_clean <- na.omit(data)
+totaldata2 <- nrow(data_clean)
+cat("----------------------------------------------------------------------------------------------","\n")
+
+#Displaying the data after data cleaning 
+cat("Total number of records after omiting null values =",totaldata2,"\n")
+totalnord <- sum(data_clean$satisfaction=="neutral or dissatisfied")
+cat("Total number of people who are neutral or dissatisfied =",totalnord,"\n")
+totals <- sum(data_clean$satisfaction=="satisfied")
+cat("Total number of people who are satisfied =",totals,"\n")
+cat("----------------------------------------------------------------------------------------------","\n")
+
+
+
+#Filter Outliers:
+#1) Remove those under 18 since they either are too young to properly review or are flying under supervision and thus are biased 
+#2) Remove those flying under 400km. These flights are typically too short to properly experience the airlines amenities since they won't offer full service for shorter flights
+library('dplyr')
+data_clean <- data_clean %>%
+  filter(Age >= 18 & Flight.Distance >= 400)
+
+totalnord <- sum(data_clean$satisfaction=="neutral or dissatisfied")
+cat("Total number of people who are neutral or dissatisfied after filtering outliers =",totalnord,"\n")
+totals <- sum(data_clean$satisfaction=="satisfied")
+cat("Total number of people who are satisfied after filtering outliers =",totals,"\n")
+cat("----------------------------------------------------------------------------------------------","\n")
+
+
+
+#Factoring all Categorical Features:
+data_filtered <- data_clean
+data_filtered$Gender <- as.factor(data_filtered$Gender)
+data_filtered$Customer.Type <- as.factor(data_filtered$Customer.Type)
+data_filtered$Type.of.Travel <- as.factor(data_filtered$Type.of.Travel)
+data_filtered$Class <- as.factor(data_filtered$Class)
+data_filtered$satisfaction <- as.factor(data_filtered$satisfaction)
+cat("The factoring of all categorical variables is complete. \n")
+cat("----------------------------------------------------------------------------------------------","\n")
+
+
+
+#Using ROSE technique to fix class Imbalance:
+library('ROSE')
+rose_data <- ROSE(satisfaction ~ ., data = data_filtered, seed = 123)$data
+totalnordnew=sum(rose_data$satisfaction=='neutral or dissatisfied')
+cat("Total number of people who are neutral or dissatisfied after using ROSE =",totalnordnew,"\n")
+totalsnew=sum(rose_data$satisfaction=='satisfied')
+cat("Total number of people who are satisfied after using ROSE =",totalsnew,"\n")
+cat("----------------------------------------------------------------------------------------------","\n")
+
+
+
+#Converting categorical variables to numerical variables for better usage.
+data_filtered$Gender <- ifelse(data_filtered$Gender == "Female", 1, 0)
+data_filtered$Customer.Type <- ifelse(data_filtered$Customer.Type == "Loyal Customer", 1, 0)
+data_filtered$Type.of.Travel <- ifelse(data_filtered$Type.of.Travel == "Business travel", 1, 0)
+cat("The conversion is complete. \n")
+cat("----------------------------------------------------------------------------------------------","\n")
+
+
+#Now one hot encoding Type of travel feature because it has 3 classes inside of it .
+library('fastDummies')
+data_encoded <- dummy_cols(data_filtered, select_columns = "Class", remove_first_dummy = FALSE)
+head(data_encoded$Class_Business)
+head(data_encoded$Class_Eco)
+head(data_encoded$`Class_Eco Plus`)
+cat("One hot encoding complete. \n")
+data_encoded$Class=NULL
+finaldata <- data_encoded
+cat("----------------------------------------------------------------------------------------------","\n")
+
+
+
+#Removing the useless Feature id,X:
+finaldata$id = NULL
+finaldata$X = NULL
+```
+
+Visualizing the processed data:
+```{r}
+library('ggplot2')
+#1.Bar Plot of satisfaction levels.
+ggplot(data_filtered, aes(x = satisfaction)) +
+  geom_bar(width = 0.5) +
+  labs(title = "Distribution of Satisfaction", x = "Satisfaction", y = "Count") +
+  scale_y_continuous(limits = c(0, 50000)) +  
+  theme_minimal()
+#2.Satisfaction levels based on Customer type:
+ggplot(data, aes(x = Customer.Type, fill = satisfaction)) +
+  geom_bar(position = "fill") +
+  labs(title = "Satisfaction by Customer Type", x = "Customer Type", y = "Proportion") +
+  scale_y_continuous(labels = scales::percent) +
+  theme_minimal()
+
+```
+
+Random-Forest model (trimming 3 least important features through experimentation)
+```{r}
+library(doParallel)
+library(caret)
+library(randomForest)
+library(ggplot2)
+
+# Set a single seed for reproducibility of the data split
+set.seed(1345)
+
+# Perform the data splitting ONCE
+# The 'finaldata' should be the pre-processed data before trimming
+train_indices <- createDataPartition(finaldata$satisfaction, p = 0.8, list = FALSE)
+train_data <- finaldata[train_indices, ]
+test_data <- finaldata[-train_indices, ]
+
+# Trimming for Random Forest (applied only to the RF training and test data)
+temp3 <- c("Class_Eco.Plus", "Gender", "Departure.Delay.in.Minutes")
+train_data_rf <- train_data[, -which(names(train_data) %in% temp3)]
+test_data_rf <- test_data[, -which(names(test_data) %in% temp3)]
+colnames(train_data_rf)
+
+# Setup parallel processing for RF model training
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+
+# Train the Random Forest model
+train_control <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+rf_model_trimmed3 <- train(
+    satisfaction ~ .,
+    data = train_data_rf,
+    method = "rf",
+    trControl = train_control,
+    ntree = 200,
+    importance = TRUE
+)
+
+print("RandomForest Model created with parallel processing.")
+
+# Stop the parallel cluster
+stopCluster(cl)
+registerDoSEQ()
+
+# Predictions on the test data
+predictionsrf3 <- predict(rf_model_trimmed3, newdata = test_data_rf)
+
+# Evaluate the model
+confusionMatrix(predictionsrf3, test_data_rf$satisfaction)
+Accuracy3 <- mean(predictionsrf3 == test_data_rf$satisfaction)
+cat("Accuracy:", Accuracy3)
+```
+
+Feature Importance visualisations:
+```{r}
+library(randomForest)
+library(ggplot2)
+
+# Extract the randomForest model object from the caret train object
+rf_model_trimmed3_final <- rf_model_trimmed3$finalModel
+
+# Get the importance values from the extracted model
+importance_values <- as.data.frame(importance(rf_model_trimmed3_final))
+importance_values$Variable <- rownames(importance_values)
+
+# GINI Feature Importance Visualization
+ggplot(importance_values, aes(x = reorder(Variable, MeanDecreaseGini), y = MeanDecreaseGini)) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    labs(title = "Mean Decrease Impurity using GINI", x = "Variables", y = "Importance") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5))
+
+# Mean Decrease in Accuracy Visualization
+mean_decrease_accuracy <- importance_values[, "MeanDecreaseAccuracy"]
+feature_names <- rownames(importance_values)
+
+importance_df <- data.frame(
+    Feature = feature_names,
+    MeanDecreaseAccuracy = mean_decrease_accuracy)
+importance_df <- importance_df[order(importance_df$MeanDecreaseAccuracy, decreasing = TRUE), ]
+
+ggplot(importance_df, aes(x = reorder(Feature, MeanDecreaseAccuracy), y = MeanDecreaseAccuracy)) +
+    geom_bar(stat = "identity", fill = "lightblue") +
+    coord_flip() +
+    labs(title = "Mean Decrease in Accuracy for Features",
+         x = "Features",
+         y = "Mean Decrease in Accuracy") +
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 10))
+```
+
+Performing SVM default :
+```{r}
+# Setup parallel processing
+library(doParallel)
+library(caret)
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+
+# Setting up 10-Fold Cross-Validation with parallel support
+train_control_svm <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+
+# Training the SVM Model with Cross-Validation
+# Use the 'train_data' from the initial split
+svm_model <- train(satisfaction ~ ., data = train_data, method = "svmLinear", trControl = train_control_svm)
+
+# Stop the parallel cluster when training is complete
+stopCluster(cl)
+registerDoSEQ()
+
+# Print model details
+print("SVM Model created with 10-fold cross-validation.")
+print(svm_model)
+
+# Predicting on the test data from the initial split
+predictions_svm <- predict(svm_model, newdata = test_data)
+
+# Evaluating the Model
+confusion_svm <- confusionMatrix(predictions_svm, test_data$satisfaction)
+print(confusion_svm)
+
+# Accuracy
+Accuracysvmdefault <- confusion_svm$overall['Accuracy']
+cat("Accuracy on independent test set:", Accuracysvmdefault, "\n")
+
+```
+
+Normalization of data and some feature selection results:
+```{r}
+# Function to perform Min-Max normalization
+min_max_norm <- function(x) {
+  return((x - min(x)) / (max(x) - min(x)))
+}
+
+# Apply Min-Max normalization to all numeric columns in finaldata
+finaldata_normalized <- as.data.frame(lapply(finaldata, function(col) {
+  if (is.numeric(col)) {
+    min_max_norm(col)
+  } else {
+    col  # Keep non-numeric columns unchanged
+  }
+}))
+
+
+#trimming 
+tempsvm <- c("Gender", "Departure.Delay.in.Minutes", "Class_Business", "Class_Eco", "Class_Eco Plus")
+
+finaldata_normal_trimmed <- data.frame(finaldata_normalized)
+finaldata_normal_trimmed <- finaldata_normal_trimmed[, -which(names(finaldata_normal_trimmed) %in% tempsvm)]
+colnames(finaldata_normal_trimmed)
+
+```
+
+comparing svm and randomforest:
+```{r}
+#----------------- Data Preparation for Plotting ------------------
+
+# Extract key performance metrics from both models
+svm_metrics <- confusion_svm$byClass
+rf_metrics <- confusionMatrix(predictionsrf3, test_data$satisfaction)$byClass
+
+# Create a data frame for plotting performance metrics
+metrics_df <- data.frame(
+  Model = rep(c("SVM", "Random Forest"), each = 4),
+  Metric = rep(c("Accuracy", "Precision", "Recall", "F1-Score"), 2),
+  Value = c(
+    confusion_svm$overall['Accuracy'],
+    svm_metrics['Precision'],
+    svm_metrics['Recall'],
+    svm_metrics['F1'],
+    mean(predictionsrf3 == test_data$satisfaction), # Accuracy for RF
+    rf_metrics['Precision'],
+    rf_metrics['Recall'],
+    rf_metrics['F1']
+  )
+)
+
+# For better visualization, rename "Random Forest"
+metrics_df$Model[metrics_df$Model == "Random Forest"] <- "RF"
+
+#----------------- Visualization ------------------
+
+# 1. Bar plot comparing key performance metrics
+library(ggplot2)
+
+ggplot(metrics_df, aes(x = Metric, y = Value, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+  geom_text(aes(label = sprintf("%.3f", Value)), 
+            position = position_dodge(width = 0.8), 
+            vjust = -0.5, size = 4) +
+  labs(title = "Model Performance Comparison",
+       x = "Metric",
+       y = "Value") +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0, 1.1)) +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "top",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 2. Confusion matrix visualization for both models
+
+# Function to create a ggplot-based confusion matrix plot
+plot_confusion_matrix <- function(cm, model_name) {
+  df <- as.data.frame(cm$table)
+  ggplot(df, aes(x = Reference, y = Prediction, fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = Freq), vjust = 1, size = 6) +
+    scale_fill_gradient(low = "white", high = "steelblue") +
+    labs(title = paste("Confusion Matrix for", model_name),
+         x = "Actual Class", y = "Predicted Class") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5))
+}
+
+# Plot the confusion matrix for SVM
+plot_confusion_matrix(confusion_svm, "SVM")
+
+# Plot the confusion matrix for Random Forest
+confusion_rf <- confusionMatrix(predictionsrf3, test_data$satisfaction)
+plot_confusion_matrix(confusion_rf, "Random Forest")
+```
+
+
+
