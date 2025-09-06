@@ -82,9 +82,7 @@ The Mean Decrease in Accuracy plot from the Random Forest model further highligh
 
 The performance of the selected Random Forest and SVM models was rigorously compared across several key metrics: Accuracy, F1-Score, Precision, and Recall.
 
-<p align="center">
-  <img src="[https://github.com/user-attachments/assets/26cd96f8-3f26-4210-9d3d-d43f048a225e](https://github.com/user-attachments/assets/26cd96f8-3f26-4210-9d3d-d43f048a225e)" alt="Model Performance Comparison" width="600"/>
-</p>
+<img width="1394" height="862" alt="ModelPerformanceComparison" src="https://github.com/user-attachments/assets/6ba77858-cfd0-41ef-a9af-dabe6dfd88f5" />
 
 **Key Findings:**
 
